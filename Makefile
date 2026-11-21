@@ -25,7 +25,9 @@ ROMNAMES= 	masIDE \
 		elkSCSI_hog \
 		elkSCSI_mince \
 		elkIDE_hog \
-		masVFS_Pi1MHz
+		masVFS_Pi1MHz \
+		bbcVFS_Pi1MHz_lo \
+		bbcVFS_Pi1MHz_hi
 
 
 ROMS=$(addsuffix .rom, $(addprefix $(BUILDDIR)/, $(ROMNAMES)))
@@ -34,7 +36,19 @@ TARGETS = $(BUILDDIR)/ $(ROMS) $(BUILDDIR)/adfsroms.ssd
 
 all:: roms ssd compares
 
-roms: $(ROMS)
+# The Model B + IntegraB VFS is two ROMs (bbcVFS_Pi1MHz_lo/_hi, see
+# src/configs/bbcVFS_Pi1MHz_lo.inc).  Copies are also made under their release
+# names, without an extension, so they can go straight onto a file server.
+# Keep VFSIB in step with VERBASE in the bbcVFS_Pi1MHz configs.
+VFSIB=VFS202IB
+VFSIB_ROMS=$(BUILDDIR)/$(VFSIB)LO $(BUILDDIR)/$(VFSIB)HI
+
+roms: $(ROMS) $(VFSIB_ROMS)
+
+$(BUILDDIR)/$(VFSIB)LO: $(BUILDDIR)/bbcVFS_Pi1MHz_lo.rom
+	cp $< $@
+$(BUILDDIR)/$(VFSIB)HI: $(BUILDDIR)/bbcVFS_Pi1MHz_hi.rom
+	cp $< $@
 
 .PHONY: FORCE
 
@@ -185,6 +199,7 @@ compares/new/Hoglet13x/ELK130E.da.s:compares/new/elkSCSI_mince.da.s
 clean: $(addprefix clean-, $(ROMNAMES))
 	-rm $(COMPARES)
 	-rm $(BUILDDIR)/adfsroms.ssd
+	-rm $(VFSIB_ROMS)
 
 clean-%:
 	make -C src clean ROMNAME=${*}

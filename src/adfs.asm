@@ -57,6 +57,13 @@
 		.export CommandExecXY
 		.export ErrorEscapeACKReloadFSM
 		.export ReloadFSMandDIR_ThenBRK
+.ifdef VFS_SPLIT_LOWER
+		.export GenerateErrorAtB2		; error text already at ($B2)+1, X=suffix
+		.export L89D8				; reload FSM and directory
+		.import VFS_PartnerInit
+		.import VFS_ResetB
+		.import VFS_0D96_PARTNER
+.endif
 		.importzp SCSICMD_C8_VENDOR_FCMDRESULT
         .importzp SCSICMD_1B_STARTSTOPUNIT
 	.endif
@@ -202,6 +209,9 @@ L8000:		.byte	$00,$00,$00			; No language entry
 .ifdef ELK_MINCE_COMPACT
 		.byte	'E'
 .endif
+.ifdef VFS_MODELB
+		.byte	"ib"				; Model B + IntegraB build
+.endif
 L8017:		.byte	$00				; Copyright string
 .ifdef AUTOHAZEL
 		.byte    "(C)2024 Dossy-AH",0
@@ -288,8 +298,23 @@ L8047:
 .if TARGETOS > 1
 		lda	WKSP_ADFS_2D7_SHADOW_SAVE	; Screen memory used?
 		beq	L804F				; Exit if screen unchanged
+.ifdef VFS_MODELB
+		lda	ZP_MOS_CURROM			; IntegraB: clear MEMSEL again
+		and	#$7F
+		sta	ZP_MOS_CURROM
+		sta	ROMSEL
+.else
 		sta	$FE34				; Restore screen setting
+.endif
+.ifdef USE65C12
 L804F:		stz	WKSP_ADFS_2D7_SHADOW_SAVE	; Clear screen flag
+.else				; NMOS: keep A (TubeRelease callers)
+L804F:
+		pha
+		lda	#$00
+		sta	WKSP_ADFS_2D7_SHADOW_SAVE
+		pla
+.endif
 .endif
 		rts
 
@@ -298,7 +323,34 @@ L804F:		stz	WKSP_ADFS_2D7_SHADOW_SAVE	; Clear screen flag
 ; -----------------------
 ; Put shadow screen memory into main memory if I/O address specifies &FFFExxxx
 CheckAndPageInShadowScreen:				; L8053
+.ifdef VFS_MODELB
+; IntegraB: the screen is always in main ("video") memory; in a shadow mode
+; programs see the shadow RAM at &3000-&7FFF instead.  So for &FFFExxxx set
+; MEMSEL (ROMSEL bit 7, and its copy in &F4 so interrupts keep it) for the
+; transfer; L8047 clears it.  X is incremented as before.
+		inx					; Address=&FFxxxxxx?
+		bne	@exit
+		cmp	#$FE				; Address=&FFFExxxx?
+		bne	@exit
+		pha
+		lda	#$80
+		sta	WKSP_ADFS_2D7_SHADOW_SAVE	; remember to clear MEMSEL
+		lda	ZP_MOS_CURROM
+		ora	#$80
+		sta	ZP_MOS_CURROM
+		sta	ROMSEL
+		pla
+@exit:		rts
+.else
+.ifdef USE65C12
 		phy					; Save Y
+.else				; NMOS: save Y, keep A
+		pha
+		tya
+		pha
+		tsx
+		lda	$0102,X
+.endif
 		ldy	$FE34				; Get current Screen setting
 		sty	WKSP_ADFS_2D7_SHADOW_SAVE			; Save it
 		inx					; Address=&FFxxxxxx?
@@ -308,11 +360,31 @@ CheckAndPageInShadowScreen:				; L8053
 		tya					; Get current screen state into A
 		ror	A				; Move to Cy
 		lda	#$04
+.ifdef USE65C12
 		trb	$FE34				; Put normal RAM in memory
+.else
+		lda	$FE34
+		and	#$FB
+		sta	$FE34
+.endif
 		bcc	L806D				; Exit if shadow screen being displayed
+.ifdef USE65C12
 		tsb	$FE34				; Put shadow RAM in memory
+.else
+		lda	$FE34
+		ora	#$04
+		sta	$FE34
+.endif
+.ifdef USE65C12
 L806D:		ply					; Restore Y
+.else				; NMOS: restore Y, drop saved A
+L806D:
+		pla
+		tay
+		pla
+.endif
 		rts
+.endif ; VFS_MODELB
 .endif
 
 
@@ -939,6 +1011,7 @@ GenerateErrorSuffX:					; L8374
 		pla
 		sta	$B3
 .endif
+GenerateErrorAtB2:					; (split VFS) entry with ($B2) set
 
 .ifdef USE65C12
 		lda	#ADFS_FLAGS_FSM_INCONSISTENT
@@ -1105,12 +1178,16 @@ L8417:		lda	#$00
 		cmp	#$C7				; Is it 'Disc error'?
 		bne	L843D				; No, execute the error
 .if TARGETOS > 1
+.ifdef USE65C12
 		dec	A
+.else				; NMOS: A was #$C7
+		lda	#$C6
+.endif
 		jsr	OSBYTEYFFX00			; OSBYTE &C6, read Exec and Spool handles
 .ifdef USE65C12
 		phy					; Save Spool handle
 .else
-		tay
+		tya					; save SPOOL handle (was TAY, which lost it)
 		pha
 .endif
 		txa					; Get Exec handle in A
@@ -2235,9 +2312,15 @@ L8B09:		ldx	#<WKSP_ADFS_215_DSKOPSAV_RET			; Point to control block
 .endif
 		lda	WKSP_ADFS_317_CURDRV		; Get current drive
 .ifdef HD_SCSI_VFS
+.ifdef USE65C12
 		inc	A
 		beq	VFS_L8950
 		dec	A
+.else				; NMOS: &FF -> 0
+		cmp	#$FF
+		bne	VFS_L8950
+		lda	#$00
+.endif
 VFS_L8950:
 .endif
 		ora	WKSP_ADFS_21B_DSKOPSAV_SEC			; OR with drive number
@@ -4971,7 +5054,7 @@ L9A92:		.byte	"L."				; Start of *Load option
 L9A94:		.byte	"$.!BOOT"			; *Run option and end of *Load option
 		.byte	$0D
 L9A9C:
-.if TARGETOS > 1
+.if TARGETOS > 1 && (!.def(VFS_MODELB))			; MOS 1.20 has no -fs- prefixes
 		.byte	"E.-", FSNAMESTR, "-$.!BOOT"		; *Exec option
 .else ; TARGETOS
 		.byte	"E.$.!BOOT"			; *Exec option
@@ -5223,7 +5306,12 @@ _lbbc9AF0:
 ;; on this call.
 ;;
 Serv2:
-.if TARGETOS > 1 || .def(AUTOHAZEL)
+.ifdef VFS_MODELB
+		lda	#VFS_LOWER_DF0			; private page is in this bank (&B000)
+		sta	$0DF0,X				; and nothing is claimed from main memory
+		tya
+		pha
+.elseif TARGETOS > 1 || .def(AUTOHAZEL)
 		lda	$0DF0,X				; Get workspace pointer
   .ifdef HD_SCSI_VFS
 		bne	L9B0A				; Use Y if 0
@@ -5267,7 +5355,18 @@ L9B0A:
 .endif ; TARGETOS
 
 
+.ifdef VFS_MODELB
+; Model B: the workspace is in sideways RAM, which is all zeros straight after
+; *SRLOAD - so on a soft BREAK also check it, and set it up if it isn't valid
+; (a Master's Hazel is always set up by the power-on reset).
+		bne	@init				; hard BREAK: set up the workspace
+		jsr	CalcWkspChecksum
+		cmp	($BA),Y
+		beq	L9B3B				; soft BREAK, workspace intact
+@init:
+.else
 		beq	L9B3B				; Soft BREAK, jump ahead
+.endif
 		jsr	GetWkspAddr_BA			; Find workspace
 		tay					; Y=0
 L9B14:		lda	L9A4F,Y				; Initialise workspace
@@ -5343,7 +5442,11 @@ _elkL9B40:
 		lda	$0DF0,X				; Check w/s pointer
 		bmi	L9B47				; Exit if using high workspace
 .elseif TARGETOS > 1
+.ifdef USE65C12
 		bit	$0DF0,X				; Check w/s pointer
+.else				; NMOS: only N tested; Y reloaded by TAY
+		ldy	$0DF0,X
+.endif
 		bmi	L9B47				; Exit if using high workspace
 .endif
 .ifdef HD_SCSI_VFS
@@ -5351,6 +5454,9 @@ _elkL9B40:
   		adc	#$04
 L9B47:
   		tay
+  .ifdef VFS_MODELB
+		jsr	VFS_ResetB			; reset work (Master: service &27)
+  .endif
 .else
 		iny					; Claim one page of low workspace
 L9B47:
@@ -5398,7 +5504,7 @@ L9B50:
 ;; ==========================
 Serv3:
 
-.ifdef HD_SCSI_VFS
+.if .def(HD_SCSI_VFS) && .def(USE65C12)
 		phy
 .else
 	; TODO: add to new TRIM / 65C12
@@ -5522,6 +5628,10 @@ L9B94:
 .endif
 
 .ifdef HD_SCSI_VFS
+  .ifdef VFS_SPLIT_LOWER
+		bit	VFS_0D96_PARTNER		; no video/mouse half: no interlace check
+		bmi	VFS_L91B3
+  .endif
 		php
 		sei
 		jsr	swap7PWSP_373_N933
@@ -5532,13 +5642,26 @@ VFS_L91B2:
 		sta	VFS_N93A_SEARCHING_IN_PROGRESS		; clear seraching in progress
 		jsr	swap7PWSP_373_N933
 		plp
+  .ifdef VFS_SPLIT_LOWER
+VFS_L91B3:
+  .endif
+.ifdef USE65C12
 		stz	WKSP_ADFS_22F
+.else
+		lda	#$00
+		sta	WKSP_ADFS_22F
+.endif
 .else
 		lda	#$10
 		sta	WKSP_ADFS_200
 .endif
 .if TARGETOS > 1
+.ifdef USE65C12
 		stz	WKSP_ADFS_2D7_SHADOW_SAVE
+.else
+		lda	#$00
+		sta	WKSP_ADFS_2D7_SHADOW_SAVE
+.endif
   .ifdef HD_MMC_HOG	; TODO REMOVE?
 		stz	WKSP_ADFS_2EC_HOG_QRY
 		jsr	initializeDriveTable
@@ -5642,9 +5765,24 @@ L9C1A:
         lda     WKSP_ADFS_22F                   ; 922B AD 2F C2                 ./.
         cmp     #$FF                            ; 922E C9 FF                    ..
         bne     L9240                           ; 9230 D0 0E                    ..
+.ifdef USE65C12
         stz    	WKSP_ADFS_22E                   ; 9232 9C 2E C2                 ...
+.else
+		lda	#$00
+		sta	WKSP_ADFS_22E
+.endif
+.ifdef USE65C12
         stz     WKSP_ADFS_22D                   ; 9235 9C 2D C2                 .-.
+.else
+		lda	#$00
+		sta	WKSP_ADFS_22D
+.endif
+.ifdef USE65C12
         stz     WKSP_ADFS_22F                   ; 9238 9C 2F C2                 ./.
+.else
+		lda	#$00
+		sta	WKSP_ADFS_22F
+.endif
         lda     #$02                            ; 923B A9 02                    ..
         sta     WKSP_ADFS_22C                   ; 923D 8D 2C C2                 .,.
 L9240:  plp                                     ; 9240 28                       (
@@ -5771,7 +5909,12 @@ L92BD:  ldy     WKSP_ADFS_100_FSM_S1+$FD        ; 92BD AC FD C1                 
         jsr     OSCLI                           ; 92C7 20 F7 FF                  ..
 VFS_L92CA:
  	    ldx     $F4                             ; 92CA A6 F4                    ..
+.ifdef USE65C12
         ply                                     ; 92CC 7A                       z
+.else
+		pla
+		tay
+.endif
         lda     #$00                            ; 92CD A9 00                    ..
         rts                                     ; 92CF 60                       `
 .endif
@@ -5887,8 +6030,17 @@ VFS_L931C:	tay					; VFS needs 4 pages
 
   .ifdef HD_SCSI_VFS
 	; TODO: Discuss??? this looks wrong - it's backing up over someone else's area?
+.ifdef USE65C12
 VFS_L9320:	stz	$0DF0,X
 		bra	VFS_L931C
+.else
+VFS_L9320:
+		pha
+		lda	#$00
+		sta	$0DF0,X
+		pla
+		jmp	VFS_L931C
+.endif
 Serv24:
 		dey
 		dey
@@ -5989,13 +6141,40 @@ L9D1E:
 			VFS_N923_flag = $0923 ; =0 if IRQv1 is default ; surely we can find a ZP for this temp variable
 
 VFS_Serv27: ;  Reset
+.ifdef VFS_SPLIT_LOWER
+		jsr	VFS_PartnerInit			; find the video/mouse half
+		bmi	@noupper
+		jsr	VFSM_Serv27			; its reset code (far call)
+		jmp	VFS_L9420
+@noupper:
+  .ifdef VFS_Pi1MHz_Redirect
+		lda	$FC88				; Pi1MHz screen redirector on its own
+		cmp	#$8E
+		bne	VFS_L9420
+		lda	#2
+		sta	$FC88
+		jsr	$FD03
+  .endif
+		jmp	VFS_L9420
+.endif
+.ifndef VFS_SPLIT_LOWER
         	php                                     ; 9363 08                       .
         	sei                                     ; 9364 78                       x
+.ifdef USE65C12
         	stz     VFS_0D95_20Hz_CTDN              ; 9365 9C 95 0D                 ...
+.else
+		lda	#$00
+		sta	VFS_0D95_20Hz_CTDN
+.endif
 .ifndef VFS_TRIM_REDUNDANT
         	stz     $0D96                           ; 9368 9C 96 0D                 ... ;; not actually used
 .endif
+.ifdef USE65C12
         	stz     VFS_0D92_FLAG_POLL100           ; 936B 9C 92 0D                 ...
+.else
+		lda	#$00
+		sta	VFS_0D92_FLAG_POLL100
+.endif
         	lda     #$FF                            ; 936E A9 FF                    ..
         	sta     VFS_0D93_CTDN_SEARCH + 1        ; 9370 8D 94 0D                 ...
         	jsr     PreserveZpAndPage9              ; 9373 20 28 B2                  (.
@@ -6014,7 +6193,12 @@ VFS_L938A:  	lda     ($A8),y                         ; 938A B1 A8               
         	cpy		#$03
 
         	bne     VFS_L938A                       ; 9394 D0 F4                    ..
+.ifdef USE65C12
         	stz     VFS_N923_flag                    ; 9396 9C 23 09                 .#.
+.else
+		lda	#$00
+		sta	VFS_N923_flag
+.endif
 VFS_L9399:
   			lda     #OSBYTE_A8_ADDR_EXTVEC          ; 9399 A9 A8                    ..
         	ldx     #$00                            ; 939B A2 00                    ..
@@ -6107,6 +6291,7 @@ VFS_serv27_exit:
 
         	jsr     RestoreZpAndPage9               ; 941C 20 E3 B1                  ..
         	plp                                     ; 941F 28                       (
+.endif ; !VFS_SPLIT_LOWER
 VFS_L9420:
 			lda     #$27                            ; 9420 A9 27                    .'
         	jmp     L9CF7	                        ; 9422 4C 37 93                 L7.
@@ -6283,7 +6468,11 @@ L9D97:		ldx	#<WKSP_ADFS_215_DSKOPSAV_RET
 		dec	WKSP_ADFS_317_CURDRV		; Restore current drive
 L9DA3:		jsr	CommandExecXY
 .if .def(HD_SCSI_VFS)
+.ifdef USE65C12
 		bra	L9DB0				; Jump to exit
+.else
+		jmp	L9DB0
+.endif
 .else
 		bpl	L9DB0				; Jump to exit
 .endif
@@ -6361,6 +6550,9 @@ L9DF6:		jsr	L92A8
 		.byte	"."
 		.byte	((VERBASE & $F0) >> 4)+'0'
 		.byte	(VERBASE & $0F)+'0'
+.ifdef VFS_MODELB
+		.byte	"ib"				; Model B + IntegraB build
+.endif
 		.byte	$8D
 .elseif .def(HD_SCSI_XDFS)
 		.byte	$0D, "External ADFS 1.50"	; Help string
@@ -6823,7 +7015,7 @@ masPrintChNoSpool:
 		tya
 		pha
 		tsx
-		lda	$102,X
+		lda	$103,X				; the character (was $102,X = saved X)
 		pha
 .endif
 
@@ -7082,11 +7274,22 @@ RTS1:
 LA196:		.byte	$0D, $22, "tesnU", $22
 
 .ifdef HD_SCSI_VFS
+.ifdef USE65C12
 VFS_L9851:	stz     WKSP_ADFS_204                           ; 9851 9C 04 C2                 ...
 VFS_L9854:	stz     WKSP_ADFS_208                           ; 9854 9C 08 C2                 ...
         	stz     WKSP_ADFS_20C                           ; 9857 9C 0C C2                 ...
         	stz     WKSP_ADFS_210                           ; 985A 9C 10 C2                 ...
         	stz     WKSP_ADFS_214                           ; 985D 9C 14 C2                 ...
+.else
+VFS_L9851:
+		lda	#$00
+		sta	WKSP_ADFS_204
+VFS_L9854:
+		sta	WKSP_ADFS_208
+		sta	WKSP_ADFS_20C
+		sta	WKSP_ADFS_210
+		sta	WKSP_ADFS_214
+.endif
 VFS_L9860:  	inc     WKSP_ADFS_204                           ; 9860 EE 04 C2                 ...
         	rts                                     ; 9863 60                       `
 
@@ -8029,8 +8232,16 @@ LA72F:		jsr	L834E				; Generate error
 ;; Get pointer to workspace into &BA/B, return A=&00
 ;; =================================================
 GetWkspAddr_BA:						; LA744
+.ifdef VFS_MODELB
+		lda	ZP_MOS_CURROM
+		and	#$0F				; without MEMSEL
+		tax
+		lda	$0DF0,X
+		and	#$BF				; &F0 -> &B0: the page in this bank
+.else
 		ldx	ZP_MOS_CURROM
 		lda	$0DF0,X
+.endif
 		sta	$BB
 		lda	#$00
 		sta	$BA
@@ -9632,7 +9843,7 @@ my_OSFIND:		jsr	LA77F				; Check checksums
 ;; ----
 LB231:		lda	WKSP_ADFS_332			; Handle stored from *RUN?
 		beq	LB23E				; No, do a real OPEN
-.ifdef HD_SCSI_VFS
+.if .def(HD_SCSI_VFS) && .def(USE65C12)
 		stz	WKSP_ADFS_332			; Clear stored handle
 .else
 		ldy	#$00

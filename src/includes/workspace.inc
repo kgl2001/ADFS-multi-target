@@ -3,7 +3,16 @@
 .ifndef __WORKSPACE_INC__
 __WORKSPACE_INC__:
 
-.if TARGETOS > 1 || .def(AUTOHAZEL)
+.if .def(VFS_MODELB)
+; Split VFS on a Model B (see VFS_Far.asm): each half keeps its workspace in
+; its own sideways RAM bank.  Lower half (bank x): private page &B000,
+; static workspace &B100-&BFFF (the Master's &C000-&CEFF).  Upper half (bank
+; x+1): text buffer &BC00, private pages &BD00-&BFFF.
+WKSP_BASE			= $B100
+VFS_LOWER_PRIV_PAGE		= $B0
+VFS_LOWER_DF0			= VFS_LOWER_PRIV_PAGE | $40	; &F0: flag bits "enabled"
+VFS_UPPER_DF0			= $BC		; upper uses DF0+1..+3 as pages
+.elseif TARGETOS > 1 || .def(AUTOHAZEL)
 WKSP_BASE			= $C000
 .else
 WKSP_BASE			= $0E00
@@ -340,7 +349,11 @@ ZP_ADFS_RETRY_CTDN		= $CE
 
 .ifdef HD_SCSI_VFS
 
+.if .def(VFS_MODELB) && .def(VFS_SPLIT_UPPER)
+WKSP_VFS_E00_TXTBUF = VFS_UPPER_DF0 << 8	; upper half's own text buffer
+.else
 WKSP_VFS_E00_TXTBUF = WKSP_BASE + $e00
+.endif
 
 .endif
 

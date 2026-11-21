@@ -78,6 +78,22 @@ So far this has only been tested on a DataCentre IDE adaptor with a Compact Flas
 This is an experimental build for the Blitter board using the "Auto-Hazel" feature. Currently
 only the SCSI driver is built
 
+## VFS 2.02ib - Pi1MHz VFS for a Model B with an IntegraB
+
+The Pi1MHz VFS (masVFS_Pi1MHz) built for a BBC Model B with an IntegraB board, so that
+BBC Domesday can run on it. Plain 6502 code, split over two 16K sideways RAM banks:
+VFS202IBLO (the filing system, bbcVFS_Pi1MHz_lo) in any bank x and VFS202IBHI (video
+commands, mouse and trackerball, bbcVFS_Pi1MHz_hi) in bank x+1. Each half keeps its
+workspace in its own bank, so VFS does not raise PAGE. Both banks must be write-enabled
+RAM, and Domesday needs banks 4-7 for itself.
+
+It includes the Tube host code, for machines with no DNFS/DFS to provide it. Domesday also
+needs a Graphics Extension ROM (patched to work in IntegraB shadow modes) and IBOS in
+OSMODE 1.
+
+See src/configs/bbcVFS_Pi1MHz_lo.inc for why this is built from the Master code, and how
+that is adapted for the Model B.
+
 # Tools required
 
 [BeebAsm](https://github.com/stardot/beebasm)

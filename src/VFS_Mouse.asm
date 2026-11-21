@@ -134,6 +134,8 @@ VFS_D9D_OLD_IRQ1V = $0d9d ; 0D9D-0D9E
 WKSP_ADFS_215_CMDBUF = $c215
 
 sheila_ACCON =   $fe34
+sheila_SYSVIA_ifr = $fe4d
+sheila_SYSVIA_ier = $fe4e
 
 
 ;*******************************************************************************
@@ -156,8 +158,18 @@ VFS_ServiceCallsExtra:
 ;*******************************************************************************
          php
          pha
+.ifdef USE65C12
          phx
+.else
+		txa
+		pha
+.endif
+.ifdef USE65C12
          phy
+.else
+		tya
+		pha
+.endif
          tya
          clc
          adc     zp_mos_txtptr
@@ -197,8 +209,19 @@ VFS_ServiceCallsExtra:
          inx                ;skip over pointer after string
          lda     VFSM_cmdTable,X ;check for end of table (top bit set)
          bpl     @cmdLp
+.ifdef USE65C12
 @ex:     ply
+.else
+@ex:
+		pla
+		tay
+.endif
+.ifdef USE65C12
          plx
+.else
+		pla
+		tax
+.endif
          pla
          plp
 @rts:    rts
@@ -247,8 +270,18 @@ VFS_ServiceCallsExtra:
          sta     VFS_N908_MODESAVE ;save mode #
          jsr     jmpIndAA   ;call command routine
          jsr     RestoreZpAndPage9
+.ifdef USE65C12
          ply
+.else
+		pla
+		tay
+.endif
+.ifdef USE65C12
          plx
+.else
+		pla
+		tax
+.endif
          pla
          lda     #$00
          plp
@@ -450,6 +483,9 @@ SCSI_Command_AXY_CkErr:
 ;* address with address of the data buffer (if any) containing/read to receive *
 ;* data to/from the command                                                    *
 ;*******************************************************************************
+.if .def(VFS_MODELB) && .def(VFS_SPLIT_UPPER)
+         ; Model B: SCSI_Command_AXY is in VFS_Far.asm (via the lower half's buffer)
+.else
 SCSI_Command_AXY:
          stx     WKSP_ADFS_215_CMDBUF+1
          sty     WKSP_ADFS_215_CMDBUF+2
@@ -467,6 +503,7 @@ SCSI_Command_AXY:
          ldx     #<WKSP_ADFS_215_CMDBUF
          ldy     #>WKSP_ADFS_215_CMDBUF
          jmp     CommandExecXY
+.endif
 
 LABC3rts:
          rts
@@ -661,7 +698,11 @@ starCHAPTER:
          lda     #$0d
          sta     WKSP_VFS_E00_TXTBUF+2,X
          jsr     FCMD_TextBuf
+.ifdef USE65C12
          bra     FCMD_E1_VideoOn
+.else
+		jmp	FCMD_E1_VideoOn
+.endif
 
 .ifndef VFS_OPTIMISE
 setYeq0: ldy     #$00                               ; should be inlined as that is shorter and quicker
@@ -739,9 +780,16 @@ waitForSeek:
          cmp     #'0'       ;A0 - ok we're there? F*R or F*Q completed
          bne     checkNoFrame
 disableSearchPoll:
+.ifdef USE65C12
          stz     VFS_0D93_CTDN_SEARCH ;OK disable timeout counters
          stz     VFS_0D93_CTDN_SEARCH + 1
          stz     VFS_N93A_SEARCHING_IN_PROGRESS
+.else
+		lda	#$00
+		sta	VFS_0D93_CTDN_SEARCH
+		sta	VFS_0D93_CTDN_SEARCH + 1
+		sta	VFS_N93A_SEARCHING_IN_PROGRESS
+.endif
          clc
          rts
 
@@ -816,7 +864,12 @@ starSTEP:
 
 @stepback:
          eor     #$ff
+.ifdef USE65C12
          inc     A          ;negate
+.else
+		clc
+		adc	#$01
+.endif
          ldy     #LV_FCMD_2D_JUMP_BACK ;send command F command -YY
          bne     @send
 
@@ -1104,7 +1157,13 @@ parse16BitToYX:
          pha
          txa
          tay
+.ifdef USE65C12
          plx
+.else				; NMOS: X=A, Y=X, A=X as before
+		pla
+		tax
+		tya
+.endif
          rts
 
 LAF3D:   lda     VFS_0D92_FLAG_POLL100
@@ -1112,7 +1171,12 @@ LAF3D:   lda     VFS_0D92_FLAG_POLL100
          lda     #$18
          sta     sheila_USRVIA_ier
          jsr     LB022
+.ifdef USE65C12
          stz     VFS_0D92_FLAG_POLL100
+.else
+		lda	#$00
+		sta	VFS_0D92_FLAG_POLL100
+.endif
 LAF4D:   rts
 
 LAF4E:   jsr     RestoreZpAndPage9
@@ -1220,22 +1284,53 @@ LB021:   rts
 
 LB022:   lda     VFS_N909_MOUSEVISIBLE                ; If mouse is already hidden, don't hide it again
          beq     LB021
+.ifdef USE65C12
          stz     VFS_N909_MOUSEVISIBLE
+.else
+		lda	#$00
+		sta	VFS_N909_MOUSEVISIBLE
+.endif
 .ifdef VFS_Pi1MHz_Mouse_Redirect
          lda     #$F0                       ; pointer type 15 = off: the type lives in the top
          sta     MOUSE_REDIRECT+3           ; of the last position byte, and writing it completes one
 .endif
+.ifdef VFS_MODELB
+; IntegraB: the displayed screen is always main/video memory; MEMSEL (ROMSEL
+; bit 7) makes it visible at &3000-&7FFF even in a shadow mode.  Only the
+; hardware register is changed (not &F4): this code runs with interrupts off.
+         lda     ZP_MOS_CURROM
+         sta     VFS_N932_ACCON_SAVE
+         ora     #$80
+         sta     ROMSEL
+         jsr     Restore_memory_under_mouse
+         lda     VFS_N932_ACCON_SAVE
+         sta     ROMSEL
+         rts
+.else
          lda     sheila_ACCON
          sta     VFS_N932_ACCON_SAVE
          and     #$fb
+.ifdef USE65C12
          bit     #$02
          beq     @LB038
          ora     #$04
 @LB038:  sta     sheila_ACCON
+.else				; NMOS: copy ACCCON bit 1 to bit 2
+		pha
+		and	#$02
+		beq	@nmos1
+		pla
+		ora	#$04
+		pha
+@nmos1:
+		pla
+@LB038:  sta     sheila_ACCON
+.endif
          jsr     Restore_memory_under_mouse
          lda     VFS_N932_ACCON_SAVE
          sta     sheila_ACCON
          rts
+.endif
 ; Update pointer if mouse has moved
 ; ---------------------------------
 Move_Pointer_if_mouse_moved:
@@ -1252,13 +1347,32 @@ Move_Pointer_if_mouse_moved:
          cmp     VFS_N90E_PreviousMousePos+3
          beq     LB021                  ; Mouse Y has NOT moved
 ; Mouse has moved
+.ifdef VFS_MODELB
+@LB065:  lda     ZP_MOS_CURROM          ; IntegraB: MEMSEL on to draw on the screen
+         sta     VFS_N932_ACCON_SAVE
+         ora     #$80
+         sta     ROMSEL
+.else
 @LB065:  lda     sheila_ACCON
          sta     VFS_N932_ACCON_SAVE
          and     #$fb
+.ifdef USE65C12
          bit     #$02
          beq     @LB073
          ora     #$04                   ; select shadow memory for access
 @LB073:  sta     sheila_ACCON
+.else				; NMOS: copy ACCCON bit 1 to bit 2
+		pha
+		and	#$02
+		beq	@nmos2
+		pla
+		ora	#$04
+		pha
+@nmos2:
+		pla
+@LB073:  sta     sheila_ACCON
+.endif
+.endif
          lda     VFS_N904_MousePos+2    ; Copy current mouse XY to previous mouse XY
          sta     VFS_N90E_PreviousMousePos+2
          lda     VFS_N904_MousePos+3
@@ -1363,7 +1477,14 @@ Move_Pointer_if_mouse_moved:
          jsr     LB44C                  ; returns X = 0-3
          ldy     ZP_MOS_CURROM
          lda     SYSVARS_DF0_PWSKPTAB,Y
+.ifdef USE65C12
          inc     A
+.else
+		php
+		clc
+		adc	#$01
+		plp
+.endif
          sta     ZP_EXTRA_BASE+1        ; the mouse pointer as previously been copied to the workspace
          lda     LB990,X                ; get pointer to the correct shifted sprite
          sta     ZP_EXTRA_BASE
@@ -1496,7 +1617,11 @@ Move_Pointer_if_mouse_moved:
          pla
          sta     ZP_Previous_mouse_screenptr+1
          lda     VFS_N932_ACCON_SAVE
+.ifdef VFS_MODELB
+         sta     ROMSEL
+.else
          sta     sheila_ACCON
+.endif
          rts
 
 RestoreZpAndPage9:
@@ -1511,8 +1636,18 @@ RestoreZpAndPage9:
          bpl     @lp
 swapPage9AndPrivWkspP3:
          pha
+.ifdef USE65C12
          phx
+.else
+		txa
+		pha
+.endif
+.ifdef USE65C12
          phy
+.else
+		tya
+		pha
+.endif
          lda     ZP_EXTRA_BASE
          pha
          lda     ZP_EXTRA_BASE+1
@@ -1536,8 +1671,18 @@ swapPage9AndPrivWkspP3:
          sta     ZP_EXTRA_BASE+1
          pla
          sta     ZP_EXTRA_BASE
+.ifdef USE65C12
          ply
+.else
+		pla
+		tay
+.endif
+.ifdef USE65C12
          plx
+.else
+		pla
+		tax
+.endif
          pla
          rts
 
@@ -1561,7 +1706,12 @@ Restore_memory_under_mouse:
          clc
          adc     #$03
          sta     ZP_EXTR_PTR_A + 1      ; setup pointer the old screen data  ( 3rd page of private workspace)
+.ifdef USE65C12
          stz     ZP_EXTR_PTR_A
+.else
+		lda	#$00
+		sta	ZP_EXTR_PTR_A
+.endif
          lda     ZP_Previous_mouse_screenptr+1
          bmi     LB23Frts
          pha
@@ -1697,9 +1847,21 @@ Setup_mouse_pointer_workspace:
 
          ldx     ZP_MOS_CURROM
          lda     SYSVARS_DF0_PWSKPTAB,X
+.ifdef USE65C12
          inc     A
+.else
+		php
+		clc
+		adc	#$01
+		plp
+.endif
          sta     ZP_EXTR_PTR_B + 1            ; >workspace+1
+.ifdef USE65C12
          stz     ZP_EXTR_PTR_B
+.else
+		lda	#$00
+		sta	ZP_EXTR_PTR_B
+.endif
 
          sty     ZP_TEMP3                     ; table index ( which one of the 4 pointers)
          ldy     #$00                         ; why not STZ ????
@@ -1722,12 +1884,24 @@ Setup_mouse_pointer_workspace:
          cpy     #$40                       ; do 64 bytes
          bne     @loop64bytes
 
+.ifdef USE65C12
          stz     ZP_EXTRA_BASE
+.else
+		lda	#$00
+		sta	ZP_EXTRA_BASE
+.endif
          lda     #$40
          sta     ZP_EXTR_PTR_A              ; pointer to after mouse sprite
          ldx     ZP_MOS_CURROM
          lda     SYSVARS_DF0_PWSKPTAB,X
+.ifdef USE65C12
          inc     A
+.else
+		php
+		clc
+		adc	#$01
+		plp
+.endif
          sta     ZP_EXTRA_BASE+1            ; pointer to beginning of mouse sprite
          sta     ZP_EXTR_PTR_A + 1
 
@@ -1736,7 +1910,12 @@ Setup_mouse_pointer_workspace:
 
          jsr     @LB36B
 
+.ifdef USE65C12
          stz     ZP_EXTRA_BASE
+.else
+		lda	#$00
+		sta	ZP_EXTRA_BASE
+.endif
          lda     #$40
          sta     ZP_EXTR_PTR_A              ; pointer to after mouse sprite mask
          ldx     ZP_MOS_CURROM
@@ -1965,8 +2144,18 @@ OSBYTE_Extended_Vectorcode:
 ; Old BYTEV was extended, fiddle around to vector via it
 @LB4C6:  php
          sei
+.ifdef USE65C12
          phx
+.else
+		txa
+		pha
+.endif
+.ifdef USE65C12
          phy
+.else
+		tya
+		pha
+.endif
          ldx     #$03
 @LB4CC:  lda     zp_vfsv_a8_textptr,X
          pha
@@ -1977,7 +2166,12 @@ OSBYTE_Extended_Vectorcode:
          clc
          adc     #$03
          sta     $ab
+.ifdef USE65C12
          stz     $aa
+.else
+		lda	#$00
+		sta	$aa
+.endif
          ldy     #$5b
          lda     ($aa),Y
          clc
@@ -1999,8 +2193,18 @@ OSBYTE_Extended_Vectorcode:
          inx
          cpx     #$04
          bne     @LB4FB
+.ifdef USE65C12
          ply
+.else
+		pla
+		tay
+.endif
+.ifdef USE65C12
          plx
+.else
+		pla
+		tax
+.endif
          plp
          pla
          jmp     $ff4e
@@ -2053,6 +2257,27 @@ OSBYTE_Extended_Vectorcode:
 
 Extended_IRQ1_Vector:
          cld
+.ifdef VFS_MODELB
+; The Model B MOS has no 100Hz polling service call (&15).  The Master issues
+; it from its interrupt handler on the system VIA's 100Hz timer 1 interrupt,
+; so do the same here: if that interrupt is pending, poll before the MOS
+; handles (and clears) it.  X and Y are kept for the MOS's own handler.
+         lda     sheila_SYSVIA_ifr
+         and     sheila_SYSVIA_ier
+         and     #$40
+         beq     @nopoll
+         txa
+         pha
+         tya
+         pha
+         ldy     #1
+         jsr     Serv15_Poll100Hz
+         pla
+         tay
+         pla
+         tax
+@nopoll:
+.endif
          lda     sheila_USRVIA_ier   ; Check user port CB1/CB2
          and     sheila_USRVIA_ier-1
          and     #$18
@@ -2067,16 +2292,39 @@ Extended_IRQ1_Vector:
 
          rts
 
+.ifdef USE65C12
 LB567:  phx
          ldx     sheila_USRVIA_orb
          phy
          tay
+.else				; NMOS: recompute A before reading ORB (reading ORB clears CB1/CB2)
+LB567:
+		txa
+		pha
+		tya
+		pha
+		lda	sheila_USRVIA_ier
+		and	sheila_USRVIA_ier-1
+		and	#$18
+		tay
+		ldx	sheila_USRVIA_orb
+.endif
          lda     ZP_EXTRA_BASE
          pha
          lda     ZP_EXTRA_BASE+1
          pha
+.ifdef USE65C12
          phx
+.else
+		txa
+		pha
+.endif
+.ifdef USE65C12
          phy
+.else
+		tya
+		pha
+.endif
          ldy     ZP_MOS_CURROM
          lda     SYSVARS_DF0_PWSKPTAB,Y
          clc
@@ -2085,7 +2333,12 @@ LB567:  phx
          lda     #$44
          sta     ZP_EXTRA_BASE
          jsr     swapZPEXTRA6with904
+.ifdef USE65C12
          ply
+.else
+		pla
+		tay
+.endif
          jsr     Get_Pointer_TypeX
          tya
          and     #$10
@@ -2105,7 +2358,12 @@ LB567:  phx
          sta     VFS_N904_MousePos
          bcc     @LB5B1
          inc     VFS_N904_MousePos+1
+.ifdef USE65C12
 @LB5B1:  bra     @LB5CC
+.else
+@LB5B1:
+		jmp	@LB5CC
+.endif
 
 @LB5B3:  lda     VFS_N904_MousePos
          ora     VFS_N904_MousePos+1
@@ -2133,7 +2391,11 @@ LB567:  phx
          sta     VFS_N904_MousePos+2
          bcc     @LB60A
          inc     VFS_N904_MousePos+3
+.ifdef USE65C12
          bra     @LB60A
+.else
+		jmp	@LB60A
+.endif
 
 @LB5F1:  lda     VFS_N904_MousePos+2
          ora     VFS_N904_MousePos+3
@@ -2144,7 +2406,11 @@ LB567:  phx
          sta     VFS_N904_MousePos+2
          bcs     @LB60A
          dec     VFS_N904_MousePos+3
+.ifdef USE65C12
          bra     @LB60A
+.else
+		jmp	@LB60A
+.endif
 
 @LB609:  pla
 @LB60A:  lda     sheila_USRVIA_orb
@@ -2153,8 +2419,18 @@ LB567:  phx
          sta     ZP_EXTRA_BASE+1
          pla
          sta     ZP_EXTRA_BASE
+.ifdef USE65C12
          ply
+.else
+		pla
+		tay
+.endif
+.ifdef USE65C12
          plx
+.else
+		pla
+		tax
+.endif
          lda     $fc
          rts
 
@@ -2174,8 +2450,18 @@ Serv15_Poll100Hz:
 @sk1:    dec     VFS_0D93_CTDN_SEARCH
 @sk2:    lda     VFS_0D92_FLAG_POLL100
          beq     @poh3
+.ifdef USE65C12
          phx
+.else
+		txa
+		pha
+.endif
+.ifdef USE65C12
          phy
+.else
+		tya
+		pha
+.endif
          jsr     PreserveZpAndPage9
 .ifdef VFS_Pi1MHz_Mouse_Redirect
          jsr     UsbMouse_Read          ; A USB mouse on the Pi moves the pointer too
@@ -2185,8 +2471,18 @@ Serv15_Poll100Hz:
          beq     @poh4
          jsr     Move_Pointer_if_mouse_moved
 @poh4:   jsr     RestoreZpAndPage9
+.ifdef USE65C12
          ply
+.else
+		pla
+		tay
+.endif
+.ifdef USE65C12
          plx
+.else
+		pla
+		tax
+.endif
 @poh3:   pla
 @poh2:   dey                ;decrement semaphore
 .ifndef VFS_OPTIMISE
@@ -2235,7 +2531,13 @@ LB67E:   jsr     Get_Pointer_TypeX  ; Get device type to X
          sta     VFS_N90D_MOUSE_BUTTON_STILL_ACTIVE             ; Set last button state to current button state
 @LB697:  rts
 
+.ifdef USE65C12
 @LB698:  stz     VFS_N90D_MOUSE_BUTTON_STILL_ACTIVE             ; Clear last button state
+.else
+@LB698:
+		lda	#$00
+		sta	VFS_N90D_MOUSE_BUTTON_STILL_ACTIVE
+.endif
          lda     VFS_N90C_MOUSE_LAST_BUTTON
          cmp     @LB6C7,X           ; Compare current button state with button locations
          beq     @LB697             ; No buttons pressed, exit
@@ -2336,7 +2638,11 @@ UsbMouse_Read:
          bcs     @store                 ; moved left/down, still on the screen
          lda     #$00
          sta     VFS_N904_MousePos,X
+.ifdef USE65C12
          bra     @store
+.else
+		jmp	@store
+.endif
 @up:     cmp     UsbMouse_MaxHi,X       ; the user port's limits: &4FC, &3FC
          bcc     @store
          bne     @max
@@ -2369,9 +2675,19 @@ UsbMouse_Wksp:
 UsbMouse_Buttons:
          bit     VFS_0D92_FLAG_POLL100  ; held buttons are only kept under *MOUSE
          bpl     @rts
+.ifdef USE65C12
          phx
          phy
          pha
+.else				; NMOS: stack A,X,Y
+		pha
+		txa
+		pha
+		tya
+		pha
+		tsx
+		lda	$0103,X
+.endif
          lda     ZP_EXTRA_BASE+1
          pha
          lda     ZP_EXTRA_BASE
@@ -2386,9 +2702,17 @@ UsbMouse_Buttons:
          sta     ZP_EXTRA_BASE
          pla
          sta     ZP_EXTRA_BASE+1
+.ifdef USE65C12
          pla
          ply
          plx
+.else				; NMOS: matching exit
+		pla
+		tay
+		pla
+		tax
+		pla
+.endif
 @rts:    rts
 .endif
 
@@ -2508,15 +2832,33 @@ VFSstarTMAX:
          ZEROY
          jsr     parse16bitDecXA ;get first parameter
          bcs     restoreP9BrkBadNumber
+.ifdef USE65C12
          phx
          pha
+.else				; NMOS: PHX:PHA keeping A, X, Y and C
+		pha
+		pha
+		txa
+		tsx
+		sta	$0102,X
+		tax
+		pla
+		pha
+.endif
          jsr     skipCommaOrSpace
          jsr     parse16bitDecXA ;get second param
          bcs     pl2RestoreP9BrkBadNumber
          ldy     #$02
          jsr     storeMouseYptrAX ;save second param at offset Y=2
          pla                ;unstack first param
+.ifdef USE65C12
          plx
+.else				; NMOS: PLX keeping A; Y reloaded after
+		tay
+		pla
+		tax
+		tya
+.endif
          dec     VFS_N90E_PreviousMousePos      ; Fake a mouse move to force a redraw incase the pointer has chnages
          ldy     #$00       ;save at offset 0
 storeMouseYptrAX:
@@ -2538,8 +2880,19 @@ VFSstarTSET:
          ZEROY
          jsr     parse16bitDecXA
          bcs     restoreP9BrkBadNumber
+.ifdef USE65C12
          phx
          pha
+.else				; NMOS: PHX:PHA keeping A, X, Y and C
+		pha
+		pha
+		txa
+		tsx
+		sta	$0102,X
+		tax
+		pla
+		pha
+.endif
          jsr     skipCommaOrSpace
          jsr     parse16bitDecXA
          bcs     pl2RestoreP9BrkBadNumber
@@ -2556,7 +2909,14 @@ VFSstarTSET:
 @setY:   ldy     #$06
          jsr     storeMouseYptrAX
          pla
+.ifdef USE65C12
          plx
+.else				; NMOS: PLX keeping A; Y reloaded after
+		tay
+		pla
+		tax
+		tya
+.endif
          cpx     #$05       ;check for X>=1280
          bcc     @setX
          txa
@@ -2607,7 +2967,12 @@ VFS_FSC3_STARCMD:
          inx
          lda     @LB8A9,X
          bpl     @LB826
+.ifdef VFS_SPLIT_UPPER
+@LB849:  clc                ;split VFS: C=0 tells the lower half "not ours"
+         rts
+.else
 @LB849:  rts
+.endif
 
 @LB84A:  inx
          iny
@@ -2638,25 +3003,55 @@ VFS_FSC3_STARCMD:
          sta     $ab
          lda     @LB8A9+1,X
          sta     $aa
+.ifdef USE65C12
          phx
+.else
+		txa
+		pha
+.endif
          jsr     swap7PWSP_373_N933
+.ifdef USE65C12
          plx
+.else
+		pla
+		tax
+.endif
          cpx     #$94
          beq     @LB89D
          lda     VFS_N93A_SEARCHING_IN_PROGRESS
          beq     @LB892
          jsr     waitForSeek
 @LB892:  jsr     FCMD_GetResult
+.ifdef USE65C12
          ldx     #$00
 @LB897:  stz     WKSP_VFS_E00_TXTBUF,X
          dex
          bne     @LB897
+.else
+		ldx	#$00
+		lda	#$00
+@LB897:
+		sta	WKSP_VFS_E00_TXTBUF,X
+		dex
+		bne	@LB897
+.endif
+.ifdef USE65C12
 @LB89D:  stz     VFS_N939_RETRY_CTR
+.else
+@LB89D:
+		lda	#$00
+		sta	VFS_N939_RETRY_CTR
+.endif
          jsr     jmpIndAA
          jsr     swap7PWSP_373_N933
+.ifdef VFS_SPLIT_UPPER
+         sec                ;split VFS: C=1, the lower half drops its return
+         rts
+.else
          pla
          pla
          rts
+.endif
 
 @LB8A9:  .byte   "AUDIO"
          .dbyt   starAUDIO

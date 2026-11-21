@@ -17,9 +17,19 @@ CFGBITS_01_EJECT= $01
 CFGBITS_40_DIR	= $40
 
 VFS_Serv28:
+.ifdef USE65C12
 		phx                                     ; 8FE3 DA                       .
+.else
+		txa
+		pha
+.endif
         	sty     $A8                             ; 8FE4 84 A8                    ..
+.ifdef USE65C12
         	phy                                     ; 8FE6 5A                       Z
+.else
+		tya
+		pha
+.endif
         	lda     ($F2),y                         ; 8FE7 B1 F2                    ..
         	cmp     #$0D                            ; 8FE9 C9 0D                    ..
         	bne     VFS_L8FFE                           ; 8FEB D0 11                    ..
@@ -36,29 +46,62 @@ VFS_L8FFE:  	jsr     VFS_L9038                           ; 8FFE 20 38 90        
         	jsr     myCmosRead                           ; 9003 20 76 90                  v.
         	and     #$BF                            ; 9006 29 BF                    ).
 VFS_L9008:  	jsr     myCmosWrite                           ; 9008 20 83 90                  ..
+.ifdef USE65C12
 VFS_L900B:  	lda     #$00                            ; 900B A9 00                    ..
 VFS_L900D:  	ply                                     ; 900D 7A                       z
         	plx                                     ; 900E FA                       .
         	rts                                     ; 900F 60                       `
+.else				; NMOS: exits return 0 or &28
+VFS_L900B:
+		pla
+		tay
+		pla
+		tax
+		lda	#$00
+		rts
+VFS_L900D:
+		pla
+		tay
+		pla
+		tax
+		lda	#$28
+		rts
+.endif
 
 ; ----------------------------------------------------------------------------
 VFS_L9010:  	jsr     VFS_L906A                           ; 9010 20 6A 90                  j.
         	bne     VFS_L901C                           ; 9013 D0 07                    ..
         	jsr     myCmosRead                           ; 9015 20 76 90                  v.
         	ora     #$40                            ; 9018 09 40                    .@
+.ifdef USE65C12
         	bra     VFS_L9008                           ; 901A 80 EC                    ..
+.else
+		jmp	VFS_L9008
+.endif
 VFS_L901C:  	jsr     VFS_L906E                           ; 901C 20 6E 90                  n.
         	bne     VFS_L9028                           ; 901F D0 07                    ..
         	jsr     myCmosRead                           ; 9021 20 76 90                  v.
         	and     #$FE                            ; 9024 29 FE                    ).
+.ifdef USE65C12
         	bra     VFS_L9008                           ; 9026 80 E0                    ..
+.else
+		jmp	VFS_L9008
+.endif
 VFS_L9028:  	jsr     VFS_L9072                           ; 9028 20 72 90                  r.
         	bne     VFS_L9034                           ; 902B D0 07                    ..
         	jsr     myCmosRead                           ; 902D 20 76 90                  v.
         	ora     #$01                            ; 9030 09 01                    ..
+.ifdef USE65C12
         	bra     VFS_L9008                           ; 9032 80 D4                    ..
+.else
+		jmp	VFS_L9008
+.endif
 VFS_L9034:  	lda     #$28                            ; 9034 A9 28                    .(
+.ifdef USE65C12
         	bra     VFS_L900D                           ; 9036 80 D5                    ..
+.else
+		jmp	VFS_L900D
+.endif
 VFS_L9038:  	ldx     #$00                            ; 9038 A2 00                    ..
 VFS_L903A:  	ldy     $A8                             ; 903A A4 A8                    ..
 VFS_L903C:  	lda     VFS_cfgStrings,x                         ; 903C BD 8F 90                 ...
@@ -87,11 +130,23 @@ VFS_L9069:  	rts                                     ; 9069 60                  
 
 ; ----------------------------------------------------------------------------
 VFS_L906A:  	ldx     #VFS_cfgStrOff_VFSNoDir
+.ifdef USE65C12
         	bra     VFS_L903A
+.else
+		jmp	VFS_L903A
+.endif
 VFS_L906E:  	ldx     #VFS_cfgStrOff_VFSEject
+.ifdef USE65C12
         	bra     VFS_L903A
+.else
+		jmp	VFS_L903A
+.endif
 VFS_L9072:  	ldx     #VFS_cfgStrOff_VFSNoEject
+.ifdef USE65C12
         	bra     VFS_L903A
+.else
+		jmp	VFS_L903A
+.endif
 myCmosRead:  	lda     ZP_MOS_CURROM                             ; 9076 A5 F4                    ..
         	clc                                     ; 9078 18                       .
         	adc     #CMOS_PER_ROM_BASE                            ; 9079 69 14                    i.
@@ -125,10 +180,25 @@ VFS_Serv29:
         	cmp     #$0D                            ; 90AF C9 0D                    ..
         	bne     VFS_L90B8                           ; 90B1 D0 05                    ..
         	jsr     cfgPrintDirNoDir                           ; 90B3 20 DB 90                  ..
+.ifdef USE65C12
         	bra     VFS_L90F8                           ; 90B6 80 40                    .@
+.else
+		jmp	VFS_L90F8
+.endif
+.ifdef USE65C12
 VFS_L90B8:	phx                                     ; 90B8 DA                       .
+.else
+VFS_L90B8:
+		txa
+		pha
+.endif
         	sty     $A8                             ; 90B9 84 A8                    ..
+.ifdef USE65C12
         	phy                                     ; 90BB 5A                       Z
+.else
+		tya
+		pha
+.endif
         	jsr     VFS_L9038                           ; 90BC 20 38 90                  8.
         	beq     VFS_L90D5                           ; 90BF F0 14                    ..
         	jsr     VFS_L906A                           ; 90C1 20 6A 90                  j.
@@ -138,14 +208,28 @@ VFS_L90B8:	phx                                     ; 90B8 DA                    
         	jsr     VFS_L9072                           ; 90CB 20 72 90                  r.
         	bne     Serv29_exit                           ; 90CE D0 23                    .#
 VFS_L90D0:	jsr     VFS_L90F8                           ; 90D0 20 F8 90                  ..
+.ifdef USE65C12
 		bra     VFS_L90D8                           ; 90D3 80 03                    ..
+.else
+		jmp	VFS_L90D8
+.endif
 VFS_L90D5:	jsr     cfgPrintDirNoDir                           ; 90D5 20 DB 90                  ..
 VFS_L90D8:	jmp     VFS_L900B                           ; 90D8 4C 0B 90                 L..
 
 ; ----------------------------------------------------------------------------
 cfgPrintDirNoDir:
+.ifdef USE65C12
 		phx
+.else
+		txa
+		pha
+.endif
+.ifdef USE65C12
 		phy
+.else
+		tya
+		pha
+.endif
 		jsr     myCmosRead
 		ldx     #VFS_cfgStrOff_VFSDir
 		and     #CFGBITS_40_DIR
@@ -158,20 +242,46 @@ PrCfgStringX:	lda     VFS_cfgStrings,x
 		inx
 		cmp     #$0D
 		bne     PrCfgStringX
+.ifdef USE65C12
 Serv29_exit:	ply
+.else
+Serv29_exit:
+		pla
+		tay
+.endif
+.ifdef USE65C12
 		plx
+.else
+		pla
+		tax
+.endif
 		lda     #$29                            ; reload service call #
 		rts
 
 ; ----------------------------------------------------------------------------
+.ifdef USE65C12
 VFS_L90F8:	phx
+.else
+VFS_L90F8:
+		txa
+		pha
+.endif
+.ifdef USE65C12
 		phy
+.else
+		tya
+		pha
+.endif
 		jsr     myCmosRead
 		ldx     #VFS_cfgStrOff_VFSEject
 		and     #CFGBITS_01_EJECT
 		beq     PrCfgStringX
 		ldx     #VFS_cfgStrOff_VFSNoEject
+.ifdef USE65C12
 		bra     PrCfgStringX
+.else
+		jmp	PrCfgStringX
+.endif
 VFS_Serv1:
         	rts
 

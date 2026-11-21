@@ -44,7 +44,11 @@ HD_Command:
 .ifdef HD_SCSI_VFS
 		cmp	#$FF
 		bne	@sk1
+.ifdef USE65C12
 		inc	A
+.else				; NMOS: A was #$FF
+		lda	#$00
+.endif
 @sk1:
 .endif
 		sta	WKSP_ADFS_333_LASTACCDRV
